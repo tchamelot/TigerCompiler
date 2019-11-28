@@ -71,7 +71,8 @@ insertType (Env types tids ids) key ty
             ArrayType _ tid -> tid
             RecordType _ tid -> tid
             _ -> tids
-        newtypes = M.insert key ty types
+        newtypes = M.insertWithKey errIfExist key ty types
+        errIfExist k _ _ = error $ "Redifinition of " ++ k 
 
 newTypeId :: Env -> Int
 newTypeId (Env _ tids _) = tids + 1
@@ -100,7 +101,8 @@ insertFunc :: Env -> String -> [Type] -> Type -> Env
 insertFunc (Env types tids ids) key args ret
     = Env types tids newids
     where
-        newids = M.insert key (FuncId args ret) ids
+        newids = M.insertWithKey errIfExist key (FuncId args ret) ids
+        errIfExist k _ _ = error $ "Redifinition of " ++ k 
 
 tigerTypes :: M.Map String Type
 tigerTypes = M.fromList([("int", IntType), ("string", StringType)])

@@ -8,7 +8,7 @@ import System.Environment
 import Control.Monad
 import Data.Either
 
---main :: IO ()
+main :: IO ()
 main = do
     [file] <- getArgs
     source <- readFile file
