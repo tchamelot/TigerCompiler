@@ -211,7 +211,10 @@ transDec env (Fundec name args ret body _) =
                 if checkType bodyty (lookupType env t)
                 then insertFunc env name argsty bodyty
                 else error $ show name ++ " should return " ++ show t ++ "but return " ++ show bodyty
-            Nothing -> insertFunc env name argsty bodyty
+            Nothing -> 
+                if checkType bodyty VoidType
+                then insertFunc env name argsty bodyty
+                else error $ show name ++ " should is define as a procedure and should not return a value"
 
 transTy :: Env -> Ty -> Type
 transTy env (NameTy ty _)               =
