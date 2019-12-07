@@ -104,3 +104,24 @@ data Op
     | GtOp
     | GeOp
     deriving(Show)
+
+data OpType
+    = Arith
+    | Comp
+    | Eq
+    deriving(Show)
+
+optype :: Op -> OpType
+optype op
+    = case op of
+        PlusOp  -> Arith
+        MinusOp -> Arith
+        TimesOp -> Arith
+        DivOp   -> Arith
+        GtOp    -> Comp
+        GeOp    -> Comp
+        LtOp    -> Comp
+        LeOp    -> Comp
+        EqOp    -> Eq
+        NeqOp   -> Eq
+

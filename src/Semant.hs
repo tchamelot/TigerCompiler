@@ -1,75 +1,72 @@
 module Semant where
 
 import Syntax
+import Type
 import Environment
+import Error
 
 import Data.List
+import Data.Either
 import qualified Data.Map as M
 
-data OpType
-    = Arith
-    | Comp
-    | Eq
-    deriving(Show)
+data Expty = Expty Type [Error]
+             deriving(Show)
 
-optype :: Op -> OpType
-optype op
-    = case op of
-        PlusOp  -> Arith
-        MinusOp -> Arith
-        TimesOp -> Arith
-        DivOp   -> Arith
-        GtOp    -> Comp
-        GeOp    -> Comp
-        LtOp    -> Comp
-        LeOp    -> Comp
-        EqOp    -> Eq
-        NeqOp   -> Eq
+merge :: Expty -> Expty -> Expty
+merge (Expty _ preve) (Expty ty newe)
+    = Expty ty (preve ++ newe)
 
-transExp :: Env -> Exp -> Type
-transExp _ (NilExp _)                   = NilType
-transExp _ (IntExp _ _)                 = IntType
-transExp _ (StringExp _ _)              = StringType
-transExp env (SeqExp exps)              =
+transExp :: Env -> Exp -> Expty
+transExp _      (NilExp _)              = Expty NilType []
+transExp _      (IntExp _ _)            = Expty IntType []
+transExp _      (StringExp _ _)         = Expty StringType []
+transExp env    (SeqExp exps)           =
     let
-        ety = fmap (transExp env) exps
+        expsty = fmap (transExp env) exps
     in
-        if null exps
-        then VoidType
         -- Use foldl' to force the strict evaluation of all exp type
-        else foldl' (\_ t -> t) VoidType ety
-transExp _ (BreakExp _)                 = VoidType
-transExp env (ArrayExp ty size val _)   =
+        foldl' merge (Expty VoidType []) expsty
+transExp _      (BreakExp _)            = Expty VoidType []
+transExp env    (ArrayExp ty s v p)     =
     let
-        sizety  = transExp env size
-        valty   = transExp env val
-        arrty   = baseType $ lookupType env ty
+        Expty sty serr = transExp env s
+        Expty vty verr = transExp env v
+        errs = serr ++ verr
+        arrty = lookupType env ty
     in
-        case arrty of
-            (ArrayType t _) ->
-                if checkType IntType sizety
-                then if checkType t valty
-                     then arrty
-                     else error "Array type does not match init value"
-                else error "Array size must be an integer"
-            _ -> error $ show ty ++ " is not an array type"
-transExp env (RecordExp ty values _)    =
+        case baseType arrty of
+            bt@(ArrayType t _) ->
+                if checkType IntType sty
+                then if checkType t vty
+                     then Expty bt errs
+                     else Expty bt (errs ++ [mismatchError vty t p])
+                else Expty bt (errs ++ [mismatchError sty IntType p])
+            _ -> Expty UnknownType (errs ++ [mismatchError arrty (ArrayType vty 0) p])
+transExp env    (RecordExp ty v p)      =
     let
-        recty = baseType $ lookupType env ty
-        valty = M.map (transExp env) values
+        vty = M.map (transExp env) v
+        recty = lookupType env ty
     in
-        case recty of
-            (RecordType types _) ->
-                if (checkFields valty types)
-                then recty
-                else error "Record fields and init expression types does not match"
-            _ -> error $ show ty ++ " is not a record type"
+        case baseType recty of
+            bt@(RecordType tys _) ->
+                let
+                    dty = fmap (\t -> Expty t []) tys
+                in
+                    Expty bt (M.foldlWithKey' handleErrors [] (checkFields vty dty))
+            _ -> Expty UnknownType [mismatchError recty (RecordType (M.fromList []) 0) p]
     where
-        checkFields valty types
-            = if M.difference valty types /= M.empty
-              then error "Record type and expression does not have macthing fields"
-              else M.foldl' (&&) True (M.intersectionWith (checkType) valty types)
-transExp env (OpExp op l r _)           =
+        checkFields f1 f2 = M.differenceWith checkField f1 f2
+        checkField (Expty t1 e1) (Expty t2 _) =
+            if checkType t1 t2
+            then if null e1
+                 then Nothing
+                 else Just (Expty t1 e1)
+            else Just (Expty t2 (e1 ++ [mismatchError t1 t2 p]))
+        handleErrors errs k (Expty _ e) =
+            if null e
+            then errs ++ e
+            else errs ++ [Semantic ("Field " ++ k ++ " is not initialized") p]
+transExp env    (OpExp op l r p)        =
     let
         tl = transExp env l
         tr = transExp env r
@@ -79,151 +76,201 @@ transExp env (OpExp op l r _)           =
             Comp    -> comp tl tr
             Eq      -> eq tl tr
     where
-        arith tl tr = if (checkType tl tr) && tl == IntType
-                      then IntType
-                      else error "Type error for arithmetic operation expected Int"
-        comp tl tr = if (checkType tl tr)
-                     then if tl == IntType || tl == StringType
-                          then IntType
-                          else error "Type error for comparaison expected Int or String"
-                     else error "Comparason between two different types"
-        eq tl tr = if (checkType tl tr) && tl /= VoidType
-                   then tl
-                   else error "Type mismatch for equality check"
-transExp env (IfExp cond true false _)  =
+        arith (Expty tl el) (Expty tr er) = 
+            if (checkType tl tr) && tl == IntType
+            then if checkType IntType tl
+                 then Expty IntType (el ++ er)
+                 else Expty IntType (el ++ er ++ [mismatchError tl IntType p])
+            else Expty IntType (el ++ er ++  [mismatchError tl tr p])
+        comp (Expty tl el) (Expty tr er) =
+            if (checkType tl tr)
+            then if tl == IntType || tl == StringType
+                 then Expty IntType (el ++ er)
+                 else Expty IntType (el ++ er ++ [Semantic "Only string and in are comparable" p])
+            else Expty IntType (el ++ er ++ [mismatchError tl tr p])
+        eq (Expty tl el) (Expty tr er) =
+            if (checkType tl tr) && tl /= VoidType
+            then Expty IntType (el ++ er)
+            else Expty IntType (el ++ er ++ [mismatchError tl tr p])
+transExp env    (IfExp c t e p)         =
     let
-        condty = transExp env cond
-        truety = transExp env true
+        Expty cty cerr = transExp env c
+        Expty tty terr = transExp env t
     in
-        if checkType IntType condty
-        then case false of
-            Just false' -> if checkType truety (transExp env false')
-                           then truety
-                           else error "Then and else do not have consistant type in if expression"
-            Nothing     -> if checkType VoidType truety
-                           then VoidType
-                           else error "If statement without else must not produce any value"
-        else error "If condition must be an integer"
-transExp env (WhileExp cond body _) =
+        if checkType IntType cty
+        then case e of
+            Just e' -> 
+                let
+                    Expty ety eerr = transExp env e'
+                in
+                    if checkType tty ety
+                    then Expty tty (cerr ++ terr ++ eerr)
+                    else Expty UnknownType (cerr ++ terr ++ eerr ++ [mismatchError tty ety p])
+            Nothing -> 
+                if checkType VoidType tty
+                then Expty VoidType (cerr ++ terr)
+                else Expty VoidType (cerr ++ terr ++ [mismatchError cty VoidType p])
+        else Expty UnknownType (cerr ++ terr ++ [mismatchError cty IntType p])
+transExp env    (WhileExp c b p)        =
     let
-        condty = transExp env cond
-        bodyty = transExp env body
+        Expty cty cerr = transExp env c
+        Expty bty berr = transExp env b
     in
-        if checkType IntType condty
-        then if checkType VoidType bodyty
-             then VoidType
-             else error "While body must not produce any value"
-        else error "While condition must be an integer"
-transExp env (ForExp var beg end body _) =
+        if checkType IntType cty
+        then if checkType VoidType bty
+             then Expty VoidType (cerr ++ berr)
+             else Expty VoidType (cerr ++ berr ++ [mismatchError bty VoidType p])
+        else Expty VoidType (cerr ++ berr ++ [mismatchError cty IntType p])
+transExp env    (ForExp v i e b p)      =
     let
         varName (SimpleVar id _) = id
         varName _ = error "For variable should be an integer"
-        forenv = insertVar env (varName var) IntType
-        begty = transExp forenv beg
-        endty = transExp forenv end
-        bodyty = transExp forenv body
+
+        env' = insertVar env (varName v) IntType
+        Expty ity ierr = transExp env' i
+        Expty ety eerr = transExp env' e
+        Expty bty berr = transExp env' b
+        errs = ierr ++ eerr ++ berr
     in
-        if checkType IntType begty &&
-           checkType IntType endty
-        then if checkType VoidType bodyty
-             then VoidType
-             else error "For loop must not produce any value"
-        else error "For variable and bounds must be integers"
-transExp env (AssignExp var val _)      =
+        if checkType IntType ity &&
+           checkType IntType ety
+        then if checkType VoidType bty
+             then Expty VoidType errs
+             else Expty VoidType (errs ++ [mismatchError bty VoidType p])
+        else Expty VoidType (errs ++ [mismatchError ity IntType p, mismatchError ety IntType p])
+transExp env    (AssignExp var val p)   =
     let
-        varty = transVar env var
-        valty = transExp env val
+        Expty varty varerr = transVar env var
+        Expty valty valerr = transExp env val
+        errs = varerr ++ valerr
     in
         if checkType varty valty
-        then VoidType
-        else error $ show varty ++ " does not match " ++ show valty ++ " type"
-transExp env (CallExp func args _)      =
+        then Expty VoidType errs
+        else Expty VoidType (errs ++ [mismatchError valty varty p])
+transExp env    (CallExp f args p)      =
     let
-        (paramty, retty) = lookupFunc env func
         argsty = map (transExp env) args
     in
-        if checkArgs argsty paramty
-        then baseType retty
-        else error $ show func ++ " arguments type mismatch"
+        case lookupFunc env f of
+            Right (paramty, retty) ->
+                let
+                    Expty _ argserr = checkArgs paramty argsty 
+                in
+                    Expty (baseType retty) argserr
+            Left (Lookup err) -> Expty UnknownType [Semantic err p]
     where
-        checkArgs :: [Type] -> [Type] -> Bool
-        checkArgs argsty paramty
-            = if (length argsty) == (length paramty)
-              then foldl' (&&) True (zipWith checkType argsty paramty)
-              else error $ "Missing arguments in " ++ func ++ " call"
-transExp env (VarExp var _)             =
+        checkArg t1 (Expty t2 err) = 
+            if checkType t1 t2
+            then Expty t1 []
+            else Expty t1 [mismatchError t1 t2 p]
+        checkArgs t1 t2 =
+            if (length t1) == (length t2)
+            then foldl' merge (Expty UnknownType []) (zipWith checkArg t1 t2)
+            else Expty UnknownType [Semantic ("Function " ++ f ++ " call does not match definition") p]
+transExp env    (VarExp var _)          =
     transVar env var
-transExp env (LetExp decs body _)       =
+transExp env    (LetExp d b _)          =
     let
-        newenv = foldl' transDec env decs
+        (preenv, err1) = foldl' (mergeEnv transDecHeader) (env, []) d
+        (newenv, err2) = foldl' (mergeEnv transDec) (preenv, err1) d
     in
-        --error $ show newenv
-        newenv `seq` transExp newenv body
+        merge (Expty UnknownType err2) (transExp newenv b)
+    where
+        mergeEnv f (env, err) desc =
+            let
+                (newenv, newerr) = f env desc
+            in
+                (newenv, err ++ newerr)
+                
+        
 
-transVar :: Env -> Var -> Type
-transVar env (SimpleVar v _)            = baseType $ lookupVar env v
-transVar env (FieldVar v field _)       =
+transVar :: Env -> Var -> Expty
+transVar env    (SimpleVar v p)         = 
+    case lookupVar env v of
+        Right t -> Expty (baseType t) []
+        Left (Lookup err) -> Expty UnknownType [Semantic err p]
+transVar env    (FieldVar v field p)    =
     let
-        vty = transVar env v
+        Expty vty verr = transVar env v
     in
         case vty of
             (RecordType fields _) ->
                 case M.lookup field fields of
-                    Just t -> baseType t
-                    Nothing -> error $ field ++ " is not a member of " ++ show vty
-            _ -> error $ show v ++ " is not a record"
-transVar env (SubscriptVar v index _)   =
+                    Just t -> Expty (baseType t) verr
+                    Nothing -> Expty UnknownType (verr ++ [recFieldError vty field p])
+            _ -> Expty UnknownType (verr ++ [mismatchError vty (RecordType M.empty 0) p])
+transVar env    (SubscriptVar v i p)    =
     let
-        indexty = transExp env index
-        vty = transVar env v
+        Expty ity ierr = transExp env i
+        Expty vty verr = transVar env v
+        errs = ierr ++ verr
     in
         case vty of
             (ArrayType t _) ->
-                if checkType IntType indexty
-                then baseType t
-                else error "Array index should be an integer"
-            _ -> error $ show v ++ " is not an array"
+                if checkType IntType ity
+                then Expty (baseType t) errs
+                else Expty (baseType t) (errs ++ [mismatchError ity IntType p])
+            _ -> Expty UnknownType (errs ++ [mismatchError vty (ArrayType UnknownType 0) p])
 
-transDec :: Env -> Dec -> Env
-transDec env (Tydec name tydec _)       =
+transDecHeader :: Env -> Dec -> (Env, [Error])
+transDecHeader env  (Tydec t _ p)           =
+    case insertType env t (NameType UnknownType) of
+        Right newenv -> (newenv, [])
+        Left (Lookup err) -> (env, [Semantic err p])
+transDecHeader env  (Fundec f a r _ p)      =
     let
-        ty = transTy env tydec
+        aty = map (\(Field _ t _) -> lookupType env t) a
+        rty = maybe VoidType (lookupType env) r
     in
-        insertType env name ty
-transDec env (Vardec name tydec val _)  =
+        if rty /= UnknownType
+        then 
+            case elemIndex UnknownType aty of
+                Nothing -> (insertFunc env f aty rty, [])
+                Just i -> (insertFunc env f aty UnknownType, [Semantic ("Type of argmument " ++ show i ++ " is not defined") p])
+        else (insertFunc env f [UnknownType] UnknownType, [Semantic "Return type not defined" p])
+transDecHeader env _                        =
+    (env, [])
+
+transDec :: Env -> Dec -> (Env, [Error])
+transDec env (Tydec name tydec p)       =
     let
-        valty = transExp env val
+        Expty ty err = transTy env tydec
     in
-        case tydec of
-            Just t ->
-                if checkType valty (lookupType env t)
-                then insertVar env name valty
-                else error $ show name ++ "'s type differs from its init value's type"
-            Nothing -> valty `seq` insertVar env name valty
-transDec env (Fundec name args ret body _) =
+        case insertType env name ty of
+            Right newenv -> (newenv, [])
+            Left (Lookup err) -> (env, [Semantic err p])
+transDec env (Vardec name tydec val p)  =
+    let
+        Expty vty verr = transExp env val
+        t = maybe vty (lookupType env) tydec
+    in
+        if checkType t vty
+        then (insertVar env name t, verr)
+        else (env, verr ++ [mismatchError t vty p])
+transDec env (Fundec name args ret body p) =
     let
         funcenv = foldl' (\e (Field id t _) -> insertVar e id (lookupType env t)) env args
-        bodyty = transExp funcenv body
+        Expty bodyty bodyerr = transExp funcenv body
         argsty = map (\(Field _ t _) -> lookupType env t) args
+        rty = maybe VoidType (lookupType env) ret
     in
-        case ret of
-            Just t ->
-                if checkType bodyty (lookupType env t)
-                then insertFunc env name argsty bodyty
-                else error $ show name ++ " should return " ++ show t ++ "but return " ++ show bodyty
-            Nothing -> 
-                if checkType bodyty VoidType
-                then insertFunc env name argsty bodyty
-                else error $ show name ++ " should is define as a procedure and should not return a value"
+        if checkType bodyty rty
+        then (env, bodyerr)
+        else (env, bodyerr ++ [mismatchError bodyty rty p]) 
 
-transTy :: Env -> Ty -> Type
-transTy env (NameTy ty _)               =
-    NameType (Just (lookupType env ty))
-transTy env (RecordTy fields _)         =
+transTy :: Env -> Ty -> Expty
+transTy env (NameTy ty p)               =
+    case lookupType env ty of
+        UnknownType -> Expty (NameType UnknownType) [Semantic "Unknown type error" p]
+        t -> Expty (NameType t) []
+transTy env (RecordTy fields p)         =
     let
         fieldsty = map (\(Field n t _) -> (n, lookupType env t)) fields
     in
-        RecordType (M.fromList fieldsty) (newTypeId env)
-transTy env (ArrayTy ty _)              =
-    ArrayType (lookupType env ty) (newTypeId env)
-
+        case elemIndex UnknownType (snd $ unzip $ fieldsty) of
+            Nothing -> Expty (RecordType (M.fromList fieldsty) (newTypeId env)) []
+            Just i ->  Expty (RecordType (M.fromList fieldsty) (newTypeId env)) [Semantic ("Type of field " ++ show i ++ " is not defined") p]
+transTy env (ArrayTy ty p)              =
+    case lookupType env ty of
+        UnknownType -> Expty (ArrayType (lookupType env ty) (newTypeId env)) []
+        _ -> Expty (ArrayType (lookupType env ty) (newTypeId env)) [Semantic "Unknown type error" p]
