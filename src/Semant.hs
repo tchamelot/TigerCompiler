@@ -34,10 +34,10 @@ transExp env    (ArrayExp ty s v p)     =
         errs = serr ++ verr
         arrty = lookupType env ty
     in
-        case baseType arrty of
+        case baseType env arrty of
             bt@(ArrayType t _) ->
                 if checkType IntType sty
-                then if checkType t vty
+                then if checkType (baseType env t) vty
                      then Expty bt errs
                      else Expty bt (errs ++ [mismatchError vty t p])
                 else Expty bt (errs ++ [mismatchError sty IntType p])
@@ -47,10 +47,10 @@ transExp env    (RecordExp ty v p)      =
         vty = M.map (transExp env) v
         recty = lookupType env ty
     in
-        case baseType recty of
+        case baseType env recty of
             bt@(RecordType tys _) ->
                 let
-                    dty = fmap (\t -> Expty t []) tys
+                    dty = fmap (\t -> Expty (baseType env t) []) tys
                 in
                     Expty bt (M.foldlWithKey' handleErrors [] (checkFields vty dty))
             _ -> Expty UnknownType [mismatchError recty (RecordType (M.fromList []) 0) p]
@@ -64,8 +64,8 @@ transExp env    (RecordExp ty v p)      =
             else Just (Expty t2 (e1 ++ [mismatchError t1 t2 p]))
         handleErrors errs k (Expty _ e) =
             if null e
-            then errs ++ e
-            else errs ++ [Semantic ("Field " ++ k ++ " is not initialized") p]
+            then errs ++ [Semantic ("Field " ++ k ++ " is not initialized") p]
+            else errs ++ e
 transExp env    (OpExp op l r p)        =
     let
         tl = transExp env l
@@ -156,7 +156,7 @@ transExp env    (CallExp f args p)      =
                 let
                     Expty _ argserr = checkArgs paramty argsty 
                 in
-                    Expty (baseType retty) argserr
+                    Expty (baseType env retty) argserr
             Left (Lookup err) -> Expty UnknownType [Semantic err p]
     where
         checkArg t1 (Expty t2 err) = 
@@ -187,7 +187,7 @@ transExp env    (LetExp d b _)          =
 transVar :: Env -> Var -> Expty
 transVar env    (SimpleVar v p)         = 
     case lookupVar env v of
-        Right t -> Expty (baseType t) []
+        Right t -> Expty (baseType env t) []
         Left (Lookup err) -> Expty UnknownType [Semantic err p]
 transVar env    (FieldVar v field p)    =
     let
@@ -196,7 +196,7 @@ transVar env    (FieldVar v field p)    =
         case vty of
             (RecordType fields _) ->
                 case M.lookup field fields of
-                    Just t -> Expty (baseType t) verr
+                    Just t -> Expty (baseType env t) verr
                     Nothing -> Expty UnknownType (verr ++ [recFieldError vty field p])
             _ -> Expty UnknownType (verr ++ [mismatchError vty (RecordType M.empty 0) p])
 transVar env    (SubscriptVar v i p)    =
@@ -208,13 +208,13 @@ transVar env    (SubscriptVar v i p)    =
         case vty of
             (ArrayType t _) ->
                 if checkType IntType ity
-                then Expty (baseType t) errs
-                else Expty (baseType t) (errs ++ [mismatchError ity IntType p])
+                then Expty (baseType env t) errs
+                else Expty (baseType env t) (errs ++ [mismatchError ity IntType p])
             _ -> Expty UnknownType (errs ++ [mismatchError vty (ArrayType UnknownType 0) p])
 
 transDecHeader :: Env -> Dec -> (Env, [Error])
 transDecHeader env  (Tydec t _ p)           =
-    case insertType env t (NameType UnknownType) of
+    case insertType env t (NameType t) of
         Right newenv -> (newenv, [])
         Left (Lookup err) -> (env, [Semantic err p])
 transDecHeader env  (Fundec f a r _ p)      =
@@ -237,12 +237,12 @@ transDec env (Tydec name tydec p)       =
         Expty ty err = transTy env tydec
     in
         case insertType env name ty of
-            Right newenv -> (newenv, [])
+            Right newenv -> (newenv, err)
             Left (Lookup err) -> (env, [Semantic err p])
 transDec env (Vardec name tydec val p)  =
     let
         Expty vty verr = transExp env val
-        t = maybe vty (lookupType env) tydec
+        t = maybe vty (baseType env . lookupType env) tydec
     in
         if checkType t vty
         then (insertVar env name t, verr)
@@ -260,9 +260,9 @@ transDec env (Fundec name args ret body p) =
 
 transTy :: Env -> Ty -> Expty
 transTy env (NameTy ty p)               =
-    case lookupType env ty of
-        UnknownType -> Expty (NameType UnknownType) [Semantic "Unknown type error" p]
-        t -> Expty (NameType t) []
+    case baseType env $ lookupType env ty of
+        UnknownType -> Expty (UnknownType) [Semantic "Unknown type error" p]
+        t -> Expty t []
 transTy env (RecordTy fields p)         =
     let
         fieldsty = map (\(Field n t _) -> (n, lookupType env t)) fields

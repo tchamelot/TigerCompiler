@@ -35,7 +35,7 @@ insertType (Env types tids ids) key ty
                 (Just t, types') -> 
                     case t of
                         UnknownType -> Right (Env types' newtids ids)
-                        (NameType UnknownType) -> Right (Env types' newtids ids)
+                        (NameType _) -> Right (Env types' newtids ids)
                         _ -> Left (rdefTypeError key)
     where
         newtids = case ty of
@@ -45,6 +45,20 @@ insertType (Env types tids ids) key ty
 
 newTypeId :: Env -> Int
 newTypeId (Env _ tids _) = tids + 1
+
+baseType :: Env -> Type -> Type
+baseType env t =
+    case t of
+        NameType id -> checkLoop t $ lookupType env id
+        _ -> t
+    where
+        checkLoop t1 t2 =
+            if t1 == t2
+            then UnknownType
+            else
+                case t2 of
+                    NameType id -> checkLoop t1 $ lookupType env id
+                    _ -> t2
 
 lookupVar :: Env -> String -> Either Error Type
 lookupVar (Env _ _ ids) key

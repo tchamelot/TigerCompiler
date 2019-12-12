@@ -9,7 +9,7 @@ data Type
     | VoidType
     | RecordType    (M.Map String Type) Int
     | ArrayType     Type Int
-    | NameType      Type
+    | NameType      String
     | UnknownType
     deriving(Show)
 
@@ -20,24 +20,20 @@ instance Eq Type where
     x@(RecordType _ idl)    == y@(RecordType _ idr) = idl == idr
     x@(ArrayType _ idl)     == y@(ArrayType _ idr)  = idl == idr
     x@VoidType              == y@VoidType           = True
-    x@(NameType tl)         == y@(NameType tr)      = tl == tr
+    x@(NameType idl)        == y@(NameType idr)     = idl == idr
     _                       == _                    = False
 
-baseType :: Type -> Type
-baseType t
-    = case t of
-        NameType nbt -> baseType nbt
-        _ -> t
+--baseType :: Type -> Type
+--baseType t
+--    = case t of
+--        NameType _ nbt -> baseType nbt
+--        _ -> t
 
 checkType :: Type -> Type -> Bool
 checkType tl tr
-    = if btl /= btr
-      then case (btl, btr) of
+    = if tl /= tr
+      then case (tl, tr) of
         (RecordType _ _, NilType) -> True
         (NilType, RecordType _ _) -> True
         _ -> False
       else True
-      where
-        btl = baseType tl
-        btr = baseType tr
-
