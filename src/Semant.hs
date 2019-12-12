@@ -266,11 +266,18 @@ transTy env (NameTy ty p)               =
 transTy env (RecordTy fields p)         =
     let
         fieldsty = map (\(Field n t _) -> (n, lookupType env t)) fields
+        tid = hashPos p
     in
         case elemIndex UnknownType (snd $ unzip $ fieldsty) of
-            Nothing -> Expty (RecordType (M.fromList fieldsty) (newTypeId env)) []
-            Just i ->  Expty (RecordType (M.fromList fieldsty) (newTypeId env)) [Semantic ("Type of field " ++ show i ++ " is not defined") p]
+            Nothing -> Expty (RecordType (M.fromList fieldsty) tid) []
+            Just i ->  Expty (RecordType (M.fromList fieldsty) tid) [Semantic ("Type of field " ++ show i ++ " is not defined") p]
 transTy env (ArrayTy ty p)              =
-    case lookupType env ty of
-        UnknownType -> Expty (ArrayType (lookupType env ty) (newTypeId env)) []
-        _ -> Expty (ArrayType (lookupType env ty) (newTypeId env)) [Semantic "Unknown type error" p]
+    let
+        tid = hashPos p
+    in
+        case lookupType env ty of
+            UnknownType -> Expty (ArrayType (lookupType env ty) tid) [Semantic "Unknown type error" p]
+            _ -> Expty (ArrayType (lookupType env ty) tid) []
+
+hashPos :: Pos -> Int
+hashPos (Pos l c) = l * 500 + c

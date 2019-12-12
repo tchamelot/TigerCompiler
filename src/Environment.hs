@@ -14,41 +14,32 @@ data Identifier
 -- Semantic checking environment
 data Env
     = Env   { types :: M.Map String Type
-            , tids  :: Int
             , ids   :: M.Map String Identifier
             }
      deriving(Show)
 
 lookupType :: Env -> String -> Type
-lookupType (Env types _ _) key
+lookupType (Env types _) key
     = case M.lookup key types of
         Just t  -> t
         Nothing -> UnknownType
 
 insertType :: Env -> String -> Type -> Either Error Env
-insertType (Env types tids ids) key ty
+insertType (Env types ids) key ty
     = case ty of
-        UnknownType -> Right (Env (M.insert key ty types) tids ids)
+        UnknownType -> Right (Env (M.insert key ty types) ids)
         _ -> 
             case M.insertLookupWithKey (\_ t _ -> t) key ty types of
-                (Nothing, types') -> Right (Env types' newtids ids)
+                (Nothing, types') -> Right (Env types' ids)
                 (Just t, types') -> 
                     case t of
-                        UnknownType -> Right (Env types' newtids ids)
-                        (NameType _) -> Right (Env types' newtids ids)
+                        UnknownType -> Right (Env types' ids)
+                        (NameType _) -> Right (Env types' ids)
                         _ -> Left (rdefTypeError key)
-    where
-        newtids = case ty of
-            ArrayType _ tid -> tid
-            RecordType _ tid -> tid
-            _ -> tids
-
-newTypeId :: Env -> Int
-newTypeId (Env _ tids _) = tids + 1
 
 baseType :: Env -> Type -> Type
-baseType env t =
-    case t of
+baseType env t 
+    = case t of
         NameType id -> checkLoop t $ lookupType env id
         _ -> t
     where
@@ -61,30 +52,30 @@ baseType env t =
                     _ -> t2
 
 lookupVar :: Env -> String -> Either Error Type
-lookupVar (Env _ _ ids) key
+lookupVar (Env _ ids) key
     = case M.lookup key ids of
         Just v@(VarId t) -> Right t
         Just v@(FuncId _ _) -> Left (Lookup ("Id " ++ key ++ " is a function, not a variable"))
         Nothing -> Left (ndefVarError key)
 
 insertVar :: Env -> String -> Type -> Env
-insertVar (Env types tids ids) key ty
-    = Env types tids newids
+insertVar (Env types ids) key ty
+    = Env types newids
     where
         newids = M.insert key (VarId ty) ids
 
 lookupFunc :: Env -> String -> Either Error ([Type], Type)
-lookupFunc (Env _ _ ids) key
+lookupFunc (Env _ ids) key
     = case M.lookup key ids of
         Just v@(FuncId args ret) -> Right (args, ret)
         Just v@(VarId _) -> Left (Lookup ("Id " ++ key ++ " is a variable, not a function"))
         Nothing -> Left (ndefFuncError key)
 
 insertFunc :: Env -> String -> [Type] -> Type -> Env
-insertFunc (Env types tids ids) key args ret
+insertFunc (Env types ids) key args ret
     = case args of
-        [UnknownType] -> Env types tids newids
-        _ -> Env types tids newidsErr
+        [UnknownType] -> Env types newids
+        _ -> Env types newidsErr
     where
         newids = M.insert key (FuncId args ret) ids
         newidsErr = M.insertWithKey errIfExist key (FuncId args ret) ids
@@ -107,5 +98,5 @@ tigerFuncs = M.fromList([("print",      FuncId [StringType] VoidType),
                         ])
 
 tigerEnv :: Env
-tigerEnv = Env tigerTypes 0 tigerFuncs
+tigerEnv = Env tigerTypes tigerFuncs
 
