@@ -21,6 +21,7 @@ instance Eq Type where
     x@(ArrayType _ idl)     == y@(ArrayType _ idr)  = idl == idr
     x@VoidType              == y@VoidType           = True
     x@(NameType idl)        == y@(NameType idr)     = idl == idr
+    x@UnknownType           == y@UnknownType        = True
     _                       == _                    = False
 
 --baseType :: Type -> Type

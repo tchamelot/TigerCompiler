@@ -7,6 +7,7 @@ import Error
 
 import Data.List
 import Data.Either
+import Data.Maybe
 import qualified Data.Map as M
 
 data Expty = Expty Type [Error]
@@ -221,13 +222,18 @@ transDecHeader env  (Fundec f a r _ p)      =
     let
         aty = map (\(Field _ t _) -> lookupType env t) a
         rty = maybe VoidType (lookupType env) r
+        argerr = fromMaybe (-1) (elemIndex UnknownType aty)
     in
-        if rty /= UnknownType
-        then 
-            case elemIndex UnknownType aty of
-                Nothing -> (insertFunc env f aty rty, [])
-                Just i -> (insertFunc env f aty UnknownType, [Semantic ("Type of argmument " ++ show i ++ " is not defined") p])
-        else (insertFunc env f [UnknownType] UnknownType, [Semantic "Return type not defined" p])
+        if rty /= UnknownType && argerr == -1
+        then
+            case insertFunc env f aty rty of
+                Right newenv -> (newenv, [])
+                Left (Lookup err) -> (env, [Semantic err p])
+        else 
+            case insertFunc env f aty rty of
+                Right newenv -> (newenv, [Semantic ("UnknownType in " ++ f ++ " definition") p])
+                Left (Lookup err) -> (env, [Semantic err p, Semantic ("UnknownType in " ++ f ++ " definition") p])
+
 transDecHeader env _                        =
     (env, [])
 
@@ -245,7 +251,10 @@ transDec env (Vardec name tydec val p)  =
         t = maybe vty (baseType env . lookupType env) tydec
     in
         if checkType t vty
-        then (insertVar env name t, verr)
+        then 
+            if t /= NilType
+            then (insertVar env name t, verr)
+            else (insertVar env name UnknownType, verr ++ [Semantic "Nil initializion not constrained by record" p])
         else (env, verr ++ [mismatchError t vty p])
 transDec env (Fundec name args ret body p) =
     let

@@ -27,7 +27,7 @@ lookupType (Env types _) key
 insertType :: Env -> String -> Type -> Either Error Env
 insertType (Env types ids) key ty
     = case ty of
-        UnknownType -> Right (Env (M.insert key ty types) ids)
+        NameType key -> Right (Env (M.insert key ty types) ids)
         _ -> 
             case M.insertLookupWithKey (\_ t _ -> t) key ty types of
                 (Nothing, types') -> Right (Env types' ids)
@@ -71,15 +71,18 @@ lookupFunc (Env _ ids) key
         Just v@(VarId _) -> Left (Lookup ("Id " ++ key ++ " is a variable, not a function"))
         Nothing -> Left (ndefFuncError key)
 
-insertFunc :: Env -> String -> [Type] -> Type -> Env
+insertFunc :: Env -> String -> [Type] -> Type -> Either Error Env
 insertFunc (Env types ids) key args ret
-    = case args of
+    = case M.insertLookupWithKey (\_ f _ -> f) key (FuncId args ret) ids of
+        (Nothing, ids') -> Right (Env types ids')
+        _ -> Left (rdefFuncError key)
+    {-case args of
         [UnknownType] -> Env types newids
         _ -> Env types newidsErr
     where
         newids = M.insert key (FuncId args ret) ids
         newidsErr = M.insertWithKey errIfExist key (FuncId args ret) ids
-        errIfExist k _ _ = error $ "Redifinition of " ++ k 
+        errIfExist k _ _ = error $ "Redifinition of " ++ k -}
 
 tigerTypes :: M.Map String Type
 tigerTypes = M.fromList([("int", IntType), ("string", StringType)])

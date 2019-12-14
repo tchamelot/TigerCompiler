@@ -31,6 +31,10 @@ ndefFuncError :: String -> Error
 ndefFuncError id
     = Lookup ("Function " ++ id ++ " is not defined")
 
+rdefFuncError :: String -> Error
+rdefFuncError id
+    = Lookup ("Function " ++ id ++ " is already defined")
+
 recFieldError :: Type -> String -> Pos -> Error
 recFieldError t f p
     = Semantic (show t ++ " does not have field " ++ f) p
